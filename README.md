@@ -1,52 +1,126 @@
-# Stock Trading Backtester
+# 🚀 Smart Backtester
 
-주식 자동매매를 위한 백테스팅 시스템입니다.
+**Professional Trading Strategy Backtesting Platform**
 
-## 프로젝트 구조
+A powerful, web-based backtesting application built with Streamlit for testing trading strategies with real-time data visualization.
 
-```
-backtester/
-├── requirements.txt          # 필요한 Python 패키지
-├── config/
-│   └── config.py            # 설정 파일
-├── data/
-│   ├── loader.py            # 데이터 로더
-│   └── preprocessor.py      # 데이터 전처리
-├── strategies/
-│   ├── base_strategy.py     # 기본 전략 클래스
-│   ├── moving_average.py    # 이동평균 전략
-│   └── rsi_strategy.py      # RSI 전략
-├── backtester/
-│   ├── engine.py            # 백테스팅 엔진
-│   ├── portfolio.py         # 포트폴리오 관리
-│   └── metrics.py           # 성과 분석 지표
-├── visualization/
-│   └── analyzer.py          # 결과 시각화
-├── results/                 # 백테스트 결과 저장 폴더
-├── main.py                  # 메인 실행 파일
-├── simple_example.py        # 간단한 사용 예제
-└── analyze_results.py       # 결과 분석 및 시각화
-```
+## ✨ Features
 
-## 설치
+- 📊 **Interactive Web Interface**: Clean, professional UI with real-time controls
+- 🎯 **Multiple Strategies**: Moving Average, RSI, Bollinger Bands
+- 📈 **Advanced Charting**: Interactive candlestick charts with trading signals
+- 📊 **Performance Analytics**: Comprehensive metrics and visualizations
+- 💾 **Export Capabilities**: Download results as CSV files
+- ⚡ **Real-time Data**: Live stock data from Yahoo Finance
+- 🎨 **Responsive Design**: Works on desktop and mobile devices
 
-1. 프로젝트 클론
-```bash
-git clone <repository_url>
-cd backtester
-```
+## 🚀 Quick Start
 
-2. 필요한 패키지 설치
+### Installation
+
+1. Clone or download this repository
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## 실행
-
-### 1. 전체 백테스트 실행
+3. Run the application:
 ```bash
-python main.py
+streamlit run streamlit_app.py
 ```
+
+4. Open your browser to `http://localhost:8501`
+
+## 🎯 How to Use
+
+1. **Select Stock**: Choose from popular presets or enter any symbol
+2. **Choose Strategy**: Pick from Moving Average, RSI, or Bollinger Bands
+3. **Adjust Parameters**: Fine-tune strategy settings with sliders
+4. **Set Capital**: Configure initial investment amount
+5. **Run Backtest**: Click the "RUN BACKTEST" button
+6. **Analyze Results**: View interactive charts and performance metrics
+
+## 📊 Supported Strategies
+
+### Moving Average Cross
+- **Short MA**: Fast moving average (5-50 periods)
+- **Long MA**: Slow moving average (20-200 periods)
+- **Signal**: Buy when short > long, sell when short < long
+
+### RSI (Relative Strength Index)
+- **Period**: RSI calculation period (5-30)
+- **Oversold**: Buy threshold (10-40)
+- **Overbought**: Sell threshold (60-90)
+
+### Bollinger Bands
+- **Period**: Moving average period (10-50)
+- **Standard Deviation**: Band width multiplier (1.0-3.0)
+- **Signal**: Buy at lower band, sell at upper band
+
+## 📈 Performance Metrics
+
+- **Total Return**: Overall portfolio performance
+- **Win Rate**: Percentage of profitable trades
+- **Sharpe Ratio**: Risk-adjusted return measure
+- **Max Drawdown**: Largest peak-to-trough decline
+- **Volatility**: Portfolio return standard deviation
+- **Trade Analysis**: Detailed transaction history
+
+## 🛠️ Technical Stack
+
+- **Frontend**: Streamlit
+- **Charting**: Plotly
+- **Data**: Yahoo Finance (yfinance)
+- **Analysis**: Pandas, NumPy
+- **Caching**: Streamlit cache for performance
+
+## 📁 Project Structure
+
+```
+backtester/
+├── streamlit_app.py      # Main application
+├── requirements.txt      # Dependencies
+└── README.md            # This file
+```
+
+## 🎨 Features in Detail
+
+### Interactive Charts
+- Candlestick price charts
+- Volume indicators
+- Strategy-specific overlays
+- Buy/sell signal markers
+- Zoom and pan capabilities
+
+### Real-time Analysis
+- Live data fetching
+- Cached data for performance
+- Responsive parameter updates
+- Instant backtest execution
+
+### Export & Reporting
+- CSV trade history download
+- Performance metrics export
+- Professional report formatting
+
+## 🔧 Configuration
+
+All settings are available through the web interface:
+- Stock symbol selection
+- Time period configuration
+- Strategy parameter tuning
+- Capital allocation settings
+
+## 🚀 Performance
+
+- **Fast Execution**: Optimized for real-time interaction
+- **Caching**: 5-minute data cache for improved speed
+- **Responsive**: Immediate feedback on parameter changes
+- **Scalable**: Handles various timeframes and data sizes
+
+---
+
+Built with ❤️ using Streamlit for professional trading analysis.
 
 ### 2. 간단한 예제 실행
 ```bash

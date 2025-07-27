@@ -254,14 +254,20 @@ class BacktestEngine:
         
         # 거래 분석
         buy_trades = [t for t in trades if t['action'] == 'BUY']
-        sell_trades = [t for t in trades if t['action'] == 'SELL']
+        sell_trades = [t for t in trades if t['action'] in ['SELL', 'STOP_LOSS']]
         
-        # 승률 계산
+        # 승률 계산 (손절매는 패배로 처리)
         trade_returns = []
         for i in range(min(len(buy_trades), len(sell_trades))):
             buy_price = buy_trades[i]['price']
-            sell_price = sell_trades[i]['price']
+            sell_trade = sell_trades[i]
+            sell_price = sell_trade['price']
             trade_return = (sell_price - buy_price) / buy_price * 100
+            
+            # 손절매는 무조건 패배로 처리 (음수 수익률로 강제 설정)
+            if sell_trade['action'] == 'STOP_LOSS' and trade_return > 0:
+                trade_return = -abs(trade_return)
+            
             trade_returns.append(trade_return)
         
         win_rate = 0

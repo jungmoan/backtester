@@ -544,6 +544,11 @@ def main():
             
             with col2:
                 st.subheader("📊 Detailed Metrics")
+                
+                # 손절매 통계 계산
+                stop_loss_count = len([t for t in result['trades'] if t.get('action') == 'STOP_LOSS'])
+                regular_sell_count = len([t for t in result['trades'] if t.get('action') == 'SELL'])
+                
                 metrics_df = pd.DataFrame([
                     ["Initial Capital", f"${initial_capital:,.2f}"],
                     ["Final Value", f"${metrics['final_value']:.2f}"],
@@ -554,12 +559,19 @@ def main():
                     ["Win Rate", f"{metrics['win_rate']:.1f}%"],
                     ["Total Trades", f"{metrics['total_trades']}"],
                     ["Winning Trades", f"{metrics['winning_trades']}"],
+                    ["Regular Sells", f"{regular_sell_count}"],
+                    ["Stop Losses", f"{stop_loss_count}"],
                     ["Avg Trade Return", f"{metrics['avg_trade_return']:.2f}%"],
                     ["Best Trade", f"{metrics['best_trade']:.2f}%"],
                     ["Worst Trade", f"{metrics['worst_trade']:.2f}%"]
                 ], columns=["Metric", "Value"])
                 
                 st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+                
+                # 손절매 비율 강조 표시
+                if stop_loss_count > 0:
+                    stop_loss_rate = (stop_loss_count / metrics['total_trades']) * 100 if metrics['total_trades'] > 0 else 0
+                    st.error(f"🔻 Stop Loss Rate: {stop_loss_rate:.1f}% (All counted as losses)")
             
             # 거래 내역
             if result['trades']:
@@ -589,10 +601,21 @@ def main():
                 
                 # 손절매 통계
                 stop_loss_trades = [t for t in result['trades'] if t.get('action') == 'STOP_LOSS']
+                regular_sell_trades = [t for t in result['trades'] if t.get('action') == 'SELL']
+                
                 if stop_loss_trades:
-                    st.info(f"🛡️ Stop Loss activated {len(stop_loss_trades)} times")
-                    for trade in stop_loss_trades:
-                        st.caption(f"• {trade['date'].strftime('%Y-%m-%d')}: {trade.get('reason', 'Stop Loss')}")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.info(f"🛡️ Stop Loss activated {len(stop_loss_trades)} times")
+                        for trade in stop_loss_trades:
+                            st.caption(f"• {trade['date'].strftime('%Y-%m-%d')}: {trade.get('reason', 'Stop Loss')}")
+                    
+                    with col2:
+                        st.warning(f"⚠️ All {len(stop_loss_trades)} stop loss trades are counted as losses in win rate calculation")
+                        st.caption(f"📊 Regular sells: {len(regular_sell_trades)} | Stop losses: {len(stop_loss_trades)}")
+                        if 'total_trades' in metrics:
+                            stop_loss_rate = (len(stop_loss_trades) / metrics['total_trades']) * 100 if metrics['total_trades'] > 0 else 0
+                            st.caption(f"🔻 Stop loss rate: {stop_loss_rate:.1f}%")
             
             # 다운로드 버튼
             st.subheader("💾 Export Results")

@@ -7,12 +7,25 @@ A powerful, web-based backtesting application built with Streamlit for testing t
 ## ✨ Features
 
 - 📊 **Interactive Web Interface**: Clean, professional UI with real-time controls
-- 🎯 **Multiple Strategies**: Moving Average, RSI, Bollinger Bands
+- 🎯 **Multiple Strategies**: Moving Average, RSI, Bollinger Bands, MACD, Stochastic
 - 📈 **Advanced Charting**: Interactive candlestick charts with trading signals
 - 📊 **Performance Analytics**: Comprehensive metrics and visualizations
 - 💾 **Export Capabilities**: Download results as CSV files
 - ⚡ **Real-time Data**: Live stock data from Yahoo Finance
 - 🎨 **Responsive Design**: Works on desktop and mobile devices
+- 🔧 **Modular Architecture**: Separate strategy and backtest engine modules
+
+## 🏗️ Project Structure
+
+```
+backtester/
+├── streamlit_app.py     # Main Streamlit application
+├── strategies.py        # Trading strategy implementations
+├── backtest_engine.py   # Backtesting and performance analysis engine
+├── requirements.txt     # Python dependencies
+├── start.sh            # Startup script
+└── README.md           # Documentation
+```
 
 ## 🚀 Quick Start
 
@@ -34,7 +47,7 @@ streamlit run streamlit_app.py
 ## 🎯 How to Use
 
 1. **Select Stock**: Choose from popular presets or enter any symbol
-2. **Choose Strategy**: Pick from Moving Average, RSI, or Bollinger Bands
+2. **Choose Strategy**: Pick from 5 available strategies
 3. **Adjust Parameters**: Fine-tune strategy settings with sliders
 4. **Set Capital**: Configure initial investment amount
 5. **Run Backtest**: Click the "RUN BACKTEST" button
@@ -42,28 +55,47 @@ streamlit run streamlit_app.py
 
 ## 📊 Supported Strategies
 
-### Moving Average Cross
+### 1. Moving Average Cross
 - **Short MA**: Fast moving average (5-50 periods)
 - **Long MA**: Slow moving average (20-200 periods)
 - **Signal**: Buy when short > long, sell when short < long
 
-### RSI (Relative Strength Index)
+### 2. RSI (Relative Strength Index)
 - **Period**: RSI calculation period (5-30)
 - **Oversold**: Buy threshold (10-40)
 - **Overbought**: Sell threshold (60-90)
 
-### Bollinger Bands
+### 3. Bollinger Bands
 - **Period**: Moving average period (10-50)
 - **Standard Deviation**: Band width multiplier (1.0-3.0)
 - **Signal**: Buy at lower band, sell at upper band
 
+### 4. MACD (Moving Average Convergence Divergence)
+- **Fast EMA**: Fast exponential moving average (5-20)
+- **Slow EMA**: Slow exponential moving average (20-50)
+- **Signal EMA**: Signal line smoothing (5-15)
+- **Signal**: Buy/sell on MACD line crosses
+
+### 5. Stochastic Oscillator
+- **K Period**: %K calculation period (5-20)
+- **D Period**: %D smoothing period (1-10)
+- **Oversold/Overbought**: Entry/exit thresholds
+
 ## 📈 Performance Metrics
 
+### Basic Metrics
 - **Total Return**: Overall portfolio performance
+- **Annual Return**: Annualized return rate
 - **Win Rate**: Percentage of profitable trades
 - **Sharpe Ratio**: Risk-adjusted return measure
 - **Max Drawdown**: Largest peak-to-trough decline
 - **Volatility**: Portfolio return standard deviation
+
+### Advanced Metrics
+- **Sortino Ratio**: Downside deviation adjusted return
+- **Calmar Ratio**: Return to max drawdown ratio
+- **Profit/Loss Ratio**: Average win vs average loss
+- **Value at Risk (VaR)**: Potential loss estimate
 - **Trade Analysis**: Detailed transaction history
 
 ## 🛠️ Technical Stack
@@ -72,16 +104,24 @@ streamlit run streamlit_app.py
 - **Charting**: Plotly
 - **Data**: Yahoo Finance (yfinance)
 - **Analysis**: Pandas, NumPy
-- **Caching**: Streamlit cache for performance
+- **Architecture**: Modular design with separate strategy and engine modules
 
-## 📁 Project Structure
+## 🏗️ Module Architecture
 
-```
-backtester/
-├── streamlit_app.py      # Main application
-├── requirements.txt      # Dependencies
-└── README.md            # This file
-```
+### strategies.py
+- `BaseStrategy`: Abstract strategy interface
+- `MovingAverageStrategy`, `RSIStrategy`, etc.: Individual strategy implementations
+- `StrategyManager`: Strategy factory and coordinator
+
+### backtest_engine.py
+- `BacktestEngine`: Core backtesting logic and portfolio management
+- `PortfolioAnalyzer`: Advanced performance analysis tools
+- Comprehensive metrics calculation
+
+### streamlit_app.py
+- Main Streamlit application
+- UI components and user interaction
+- Integration of strategies and engine modules
 
 ## 🎨 Features in Detail
 

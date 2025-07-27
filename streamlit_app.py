@@ -19,6 +19,10 @@ from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
+# 로컬 모듈 import
+from strategies import StrategyManager
+from backtest_engine import BacktestEngine, PortfolioAnalyzer
+
 # 페이지 설정
 st.set_page_config(
     page_title="🚀 Smart Backtester", 
@@ -31,238 +35,96 @@ class StreamlitBacktester:
     """Streamlit용 백테스터"""
     
     def __init__(self):
-        self.initial_capital = 10000
-        
-    def calculate_ma_signals(self, data: pd.DataFrame, short: int = 20, long: int = 50) -> pd.DataFrame:
-        """이동평균 신호"""
-        df = data.copy()
-        df['MA_Short'] = df['Close'].rolling(short).mean()
-        df['MA_Long'] = df['Close'].rolling(long).mean()
-        
-        # 포지션 추적을 위한 변수
-        df['Signal'] = 0
-        df['Position'] = 0
-        current_position = 0
-        
-        for i in range(len(df)):
-            if pd.isna(df['MA_Short'].iloc[i]) or pd.isna(df['MA_Long'].iloc[i]):
-                continue
-                
-            ma_short = df['MA_Short'].iloc[i]
-            ma_long = df['MA_Long'].iloc[i]
-            
-            # 매수 조건: 포지션이 없고, 단기이평이 장기이평을 상향돌파
-            if current_position == 0 and ma_short > ma_long:
-                current_position = 1
-                df.iloc[i, df.columns.get_loc('Signal')] = 1
-                
-            # 매도 조건: 포지션이 있고, 단기이평이 장기이평을 하향돌파
-            elif current_position == 1 and ma_short < ma_long:
-                current_position = 0
-                df.iloc[i, df.columns.get_loc('Signal')] = -1
-            
-            df.iloc[i, df.columns.get_loc('Position')] = current_position
-        
-        df['Position_Change'] = df['Signal'].diff()
-        
-        return df
+        self.strategy_manager = StrategyManager()
+        self.backtest_engine = BacktestEngine()
+        self.portfolio_analyzer = PortfolioAnalyzer()
     
-    def calculate_rsi_signals(self, data: pd.DataFrame, period: int = 14, oversold: int = 30, overbought: int = 70) -> pd.DataFrame:
-        """RSI 신호"""
-        df = data.copy()
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # 포지션 추적을 위한 변수
-        df['Signal'] = 0
-        df['Position'] = 0
-        current_position = 0
-        
-        for i in range(len(df)):
-            if pd.isna(df['RSI'].iloc[i]):
-                continue
-                
-            rsi_value = df['RSI'].iloc[i]
-            
-            # 매수 조건: 포지션이 없고, RSI가 과매도 구간일 때
-            if current_position == 0 and rsi_value <= oversold:
-                current_position = 1
-                df.iloc[i, df.columns.get_loc('Signal')] = 1
-                
-            # 매도 조건: 포지션이 있고, RSI가 과매수 구간일 때
-            elif current_position == 1 and rsi_value >= overbought:
-                current_position = 0
-                df.iloc[i, df.columns.get_loc('Signal')] = -1
-            
-            df.iloc[i, df.columns.get_loc('Position')] = current_position
-        
-        df['Position_Change'] = df['Signal'].diff()
-        
-        return df
+    def get_available_strategies(self) -> List[str]:
+        """사용 가능한 전략 목록 반환"""
+        return self.strategy_manager.get_available_strategies()
     
-    def calculate_bollinger_signals(self, data: pd.DataFrame, period: int = 20, std_dev: float = 2) -> pd.DataFrame:
-        """볼린저 밴드 신호"""
-        df = data.copy()
-        df['BB_Mid'] = df['Close'].rolling(period).mean()
-        df['BB_Std'] = df['Close'].rolling(period).std()
-        df['BB_Upper'] = df['BB_Mid'] + (df['BB_Std'] * std_dev)
-        df['BB_Lower'] = df['BB_Mid'] - (df['BB_Std'] * std_dev)
-        
-        # 포지션 추적을 위한 변수
-        df['Signal'] = 0
-        df['Position'] = 0
-        current_position = 0
-        
-        for i in range(len(df)):
-            if pd.isna(df['BB_Upper'].iloc[i]) or pd.isna(df['BB_Lower'].iloc[i]):
-                continue
-                
-            close_price = df['Close'].iloc[i]
-            
-            # 매수 조건: 포지션이 없고, 가격이 하단 밴드 아래로 떨어졌을 때
-            if current_position == 0 and close_price <= df['BB_Lower'].iloc[i]:
-                current_position = 1
-                df.iloc[i, df.columns.get_loc('Signal')] = 1
-                
-            # 매도 조건: 포지션이 있고, 가격이 상단 밴드 위로 올라갔을 때
-            elif current_position == 1 and close_price >= df['BB_Upper'].iloc[i]:
-                current_position = 0
-                df.iloc[i, df.columns.get_loc('Signal')] = -1
-            
-            df.iloc[i, df.columns.get_loc('Position')] = current_position
-        
-        df['Position_Change'] = df['Signal'].diff()
-        
-        return df
+    def calculate_strategy_signals(self, strategy_name: str, data: pd.DataFrame, **params) -> pd.DataFrame:
+        """전략별 신호 계산"""
+        return self.strategy_manager.calculate_signals(strategy_name, data, **params)
     
-    def run_backtest(self, data: pd.DataFrame, strategy_data: pd.DataFrame) -> Dict:
+    def run_backtest(self, data: pd.DataFrame, strategy_data: pd.DataFrame, initial_capital: float, 
+                     stop_loss_pct: float = None, support_resistance_lookback: int = None) -> Dict:
         """백테스트 실행"""
-        cash = self.initial_capital
-        position = 0
-        portfolio_values = []
-        trades = []
-        buy_signals = []
-        sell_signals = []
-        
-        for i, (date, row) in enumerate(strategy_data.iterrows()):
-            price = row['Close']
-            signal = row.get('Signal', 0)
-            
-            # 매수 신호 (Signal = 1이고 현재 포지션이 없을 때)
-            if signal == 1 and position == 0:
-                shares = (cash * 0.95) / price
-                cash -= shares * price
-                position = shares
-                trades.append({
-                    'date': date,
-                    'action': 'BUY',
-                    'price': price,
-                    'shares': shares,
-                    'portfolio_value': cash + position * price
-                })
-                buy_signals.append({'date': date, 'price': price})
-            
-            # 매도 신호 (Signal = -1이고 현재 포지션이 있을 때)
-            elif signal == -1 and position > 0:
-                cash += position * price
-                trades.append({
-                    'date': date,
-                    'action': 'SELL',
-                    'price': price,
-                    'shares': position,
-                    'portfolio_value': cash
-                })
-                sell_signals.append({'date': date, 'price': price})
-                position = 0
-            
-            # 포트폴리오 가치 기록
-            total_value = cash + position * price
-            portfolio_values.append({
-                'date': date,
-                'portfolio_value': total_value,
-                'cash': cash,
-                'position_value': position * price,
-                'price': price
-            })
-        
-        # 최종 청산
-        if position > 0:
-            final_price = strategy_data['Close'].iloc[-1]
-            cash += position * final_price
-            sell_signals.append({'date': strategy_data.index[-1], 'price': final_price})
-        
-        return {
-            'portfolio_history': pd.DataFrame(portfolio_values),
-            'trades': trades,
-            'buy_signals': buy_signals,
-            'sell_signals': sell_signals,
-            'final_value': cash,
-            'strategy_data': strategy_data
-        }
+        self.backtest_engine.initial_capital = initial_capital
+        return self.backtest_engine.run_backtest(data, strategy_data, stop_loss_pct, support_resistance_lookback)
     
     def calculate_metrics(self, result: Dict) -> Dict:
         """성과 지표 계산"""
-        portfolio_df = result['portfolio_history']
-        trades = result['trades']
+        return self.backtest_engine.calculate_metrics(result)
+    
+    def validate_trades(self, result: Dict) -> Dict:
+        """거래 유효성 검증"""
+        return self.backtest_engine.validate_trades(result)
+
+def get_strategy_description(strategy_name: str) -> str:
+    """전략별 상세 설명 반환"""
+    descriptions = {
+        "Moving Average": """
+        **이동평균 크로스오버 전략**
         
-        if portfolio_df.empty:
-            return {}
+        두 개의 서로 다른 기간의 이동평균선을 사용하여 매매 신호를 생성합니다.
         
-        # 기본 지표
-        final_value = result['final_value']
-        total_return = (final_value / self.initial_capital - 1) * 100
+        📈 **매수 신호**: 단기 이동평균이 장기 이동평균을 상향 돌파
+        📉 **매도 신호**: 단기 이동평균이 장기 이동평균을 하향 돌파
         
-        # 수익률 시계열
-        portfolio_values = portfolio_df['portfolio_value']
-        returns = portfolio_values.pct_change().dropna()
+        **장점**: 단순하고 이해하기 쉬우며, 트렌드 추종에 효과적
+        **단점**: 횡보장에서 잦은 거짓 신호 발생 가능
+        """,
         
-        # 샤프 비율
-        if len(returns) > 1 and returns.std() > 0:
-            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
-        else:
-            sharpe_ratio = 0
+        "RSI": """
+        **RSI (상대강도지수) 전략**
         
-        # 최대 낙폭
-        rolling_max = portfolio_values.expanding().max()
-        drawdowns = (portfolio_values - rolling_max) / rolling_max
-        max_drawdown = drawdowns.min() * 100
+        가격의 상승폭과 하락폭의 비율을 이용해 과매수/과매도 상태를 판단합니다.
         
-        # 변동성
-        volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 1 else 0
+        📈 **매수 신호**: RSI가 과매도선(보통 30) 아래에서 위로 상승
+        📉 **매도 신호**: RSI가 과매수선(보통 70) 위에서 아래로 하락
         
-        # 거래 분석
-        buy_trades = [t for t in trades if t['action'] == 'BUY']
-        sell_trades = [t for t in trades if t['action'] == 'SELL']
+        **장점**: 횡보장에서 효과적, 과매수/과매도 구간 식별 용이
+        **단점**: 강한 트렌드에서는 지속적으로 과매수/과매도 상태 유지 가능
+        """,
         
-        # 승률 계산
-        trade_returns = []
-        for i in range(min(len(buy_trades), len(sell_trades))):
-            buy_price = buy_trades[i]['price']
-            sell_price = sell_trades[i]['price']
-            trade_return = (sell_price - buy_price) / buy_price * 100
-            trade_returns.append(trade_return)
+        "Bollinger Bands": """
+        **볼린저 밴드 전략**
         
-        win_rate = 0
-        if trade_returns:
-            winning_trades = sum(1 for ret in trade_returns if ret > 0)
-            win_rate = (winning_trades / len(trade_returns)) * 100
+        이동평균선과 표준편차를 이용해 가격의 상한과 하한을 설정합니다.
         
-        return {
-            'total_return': total_return,
-            'final_value': final_value,
-            'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown,
-            'volatility': volatility,
-            'win_rate': win_rate,
-            'total_trades': len(trade_returns),
-            'winning_trades': sum(1 for ret in trade_returns if ret > 0),
-            'avg_trade_return': np.mean(trade_returns) if trade_returns else 0,
-            'best_trade': max(trade_returns) if trade_returns else 0,
-            'worst_trade': min(trade_returns) if trade_returns else 0
-        }
+        📈 **매수 신호**: 가격이 하단 밴드 아래로 떨어진 후 반등
+        📉 **매도 신호**: 가격이 상단 밴드 위로 올라간 후 하락
+        
+        **장점**: 변동성을 고려한 동적 지지/저항선 제공
+        **단점**: 강한 트렌드에서는 밴드를 따라 계속 움직일 수 있음
+        """,
+        
+        "MACD": """
+        **MACD (이동평균수렴확산) 전략**
+        
+        두 지수이동평균의 차이(MACD)와 그 신호선의 교차를 이용합니다.
+        
+        📈 **매수 신호**: MACD선이 신호선을 상향 돌파
+        📉 **매도 신호**: MACD선이 신호선을 하향 돌파
+        
+        **장점**: 트렌드 변화를 빠르게 감지, 모멘텀 분석 가능
+        **단점**: 횡보장에서 잦은 거짓 신호 발생 가능
+        """,
+        
+        "Stochastic": """
+        **스토캐스틱 오실레이터 전략**
+        
+        일정 기간 동안의 최고가와 최저가 대비 현재가의 위치를 백분율로 나타냅니다.
+        
+        📈 **매수 신호**: 과매도 구간에서 %K선이 %D선을 상향 돌파
+        📉 **매도 신호**: 과매수 구간에서 %K선이 %D선을 하향 돌파
+        
+        **장점**: 단기 모멘텀 변화에 민감, 횡보장에서 효과적
+        **단점**: 노이즈가 많아 거짓 신호 발생 가능성 높음
+        """
+    }
+    return descriptions.get(strategy_name, "")
 
 @st.cache_data(ttl=300)  # 5분 캐시
 def load_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
@@ -315,20 +177,39 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
             row=1, col=1
         )
     
-    # 매도 시그널
+    # 매도 시그널 (일반 매도와 손절매 구분)
     if sell_signals:
-        sell_dates = [sig['date'] for sig in sell_signals]
-        sell_prices = [sig['price'] for sig in sell_signals]
-        fig.add_trace(
-            go.Scatter(
-                x=sell_dates,
-                y=sell_prices,
-                mode='markers',
-                marker=dict(color='red', size=12, symbol='triangle-down'),
-                name='Sell Signal'
-            ),
-            row=1, col=1
-        )
+        # 일반 매도 신호
+        regular_sells = [sig for sig in sell_signals if sig.get('type', 'strategy') in ['strategy', 'final']]
+        if regular_sells:
+            sell_dates = [sig['date'] for sig in regular_sells]
+            sell_prices = [sig['price'] for sig in regular_sells]
+            fig.add_trace(
+                go.Scatter(
+                    x=sell_dates,
+                    y=sell_prices,
+                    mode='markers',
+                    marker=dict(color='red', size=12, symbol='triangle-down'),
+                    name='Sell Signal'
+                ),
+                row=1, col=1
+            )
+        
+        # 손절매 신호
+        stop_loss_sells = [sig for sig in sell_signals if sig.get('type') == 'stop_loss']
+        if stop_loss_sells:
+            stop_dates = [sig['date'] for sig in stop_loss_sells]
+            stop_prices = [sig['price'] for sig in stop_loss_sells]
+            fig.add_trace(
+                go.Scatter(
+                    x=stop_dates,
+                    y=stop_prices,
+                    mode='markers',
+                    marker=dict(color='orange', size=14, symbol='x'),
+                    name='Stop Loss'
+                ),
+                row=1, col=1
+            )
     
     # 전략별 보조지표
     if strategy_name == "Moving Average":
@@ -372,6 +253,41 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
                           name='BB Lower', line=dict(color='gray', dash='dash')),
                 row=1, col=1
             )
+    
+    elif strategy_name == "MACD":
+        if all(col in strategy_data.columns for col in ['MACD', 'MACD_Signal']):
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['MACD'], 
+                          name='MACD', line=dict(color='blue')),
+                row=3, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['MACD_Signal'], 
+                          name='Signal', line=dict(color='red')),
+                row=3, col=1
+            )
+            if 'MACD_Histogram' in strategy_data.columns:
+                fig.add_trace(
+                    go.Bar(x=strategy_data.index, y=strategy_data['MACD_Histogram'], 
+                           name='Histogram', marker_color='gray'),
+                    row=3, col=1
+                )
+            fig.add_hline(y=0, line_dash="dash", line_color="black", row=3, col=1)
+    
+    elif strategy_name == "Stochastic":
+        if all(col in strategy_data.columns for col in ['%K', '%D']):
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['%K'], 
+                          name='%K', line=dict(color='blue')),
+                row=3, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['%D'], 
+                          name='%D', line=dict(color='red')),
+                row=3, col=1
+            )
+            fig.add_hline(y=80, line_dash="dash", line_color="red", row=3, col=1)
+            fig.add_hline(y=20, line_dash="dash", line_color="green", row=3, col=1)
     
     # 거래량
     fig.add_trace(
@@ -428,24 +344,103 @@ def main():
     # 전략 선택
     st.sidebar.subheader("🎯 Strategy Selection")
     
-    strategy_options = {
-        "Moving Average": {
-            "short_window": st.sidebar.slider("Short MA", 5, 50, 20),
-            "long_window": st.sidebar.slider("Long MA", 20, 200, 50)
-        },
-        "RSI": {
-            "period": st.sidebar.slider("RSI Period", 5, 30, 14),
-            "oversold": st.sidebar.slider("Oversold", 10, 40, 30),
-            "overbought": st.sidebar.slider("Overbought", 60, 90, 70)
-        },
-        "Bollinger Bands": {
-            "period": st.sidebar.slider("BB Period", 10, 50, 20),
-            "std_dev": st.sidebar.slider("Standard Deviation", 1.0, 3.0, 2.0, 0.1)
-        }
-    }
+    # 백테스터 생성 (전략 목록을 가져오기 위해)
+    backtester = StreamlitBacktester()
+    available_strategies = backtester.get_available_strategies()
     
-    strategy_name = st.sidebar.selectbox("Strategy", list(strategy_options.keys()))
-    strategy_params = strategy_options[strategy_name]
+    # 전략 선택
+    strategy_name = st.sidebar.selectbox("Strategy", available_strategies)
+    
+    # 전략 설명 표시
+    with st.sidebar.expander("📖 Strategy Info", expanded=False):
+        st.markdown(get_strategy_description(strategy_name))
+    
+    # 선택된 전략에 따른 동적 파라미터 설정
+    st.sidebar.subheader("⚙️ Strategy Parameters")
+    strategy_params = {}
+    
+    if strategy_name == "Moving Average":
+        strategy_params = {
+            "short": st.sidebar.slider("📈 Short MA Period", 5, 50, 20, 
+                                     help="단기 이동평균 기간 (작을수록 민감)"),
+            "long": st.sidebar.slider("📊 Long MA Period", 20, 200, 50,
+                                    help="장기 이동평균 기간 (클수록 안정적)")
+        }
+        st.sidebar.info("💡 단기 MA가 장기 MA를 상향돌파시 매수, 하향돌파시 매도")
+        
+    elif strategy_name == "RSI":
+        strategy_params = {
+            "period": st.sidebar.slider("📊 RSI Period", 5, 30, 14,
+                                      help="RSI 계산 기간"),
+            "oversold": st.sidebar.slider("📉 Oversold Level", 10, 40, 30,
+                                        help="과매도 기준선 (낮을수록 보수적)"),
+            "overbought": st.sidebar.slider("📈 Overbought Level", 60, 90, 70,
+                                          help="과매수 기준선 (높을수록 보수적)")
+        }
+        st.sidebar.info("💡 RSI가 과매도선 아래로 떨어지면 매수, 과매수선 위로 올라가면 매도")
+        
+    elif strategy_name == "Bollinger Bands":
+        strategy_params = {
+            "period": st.sidebar.slider("📊 BB Period", 10, 50, 20,
+                                      help="볼린저 밴드 기간"),
+            "std_dev": st.sidebar.slider("📏 Standard Deviation", 1.0, 3.0, 2.0, 0.1,
+                                       help="표준편차 승수 (클수록 밴드가 넓어짐)")
+        }
+        st.sidebar.info("💡 가격이 하단밴드 아래로 떨어지면 매수, 상단밴드 위로 올라가면 매도")
+        
+    elif strategy_name == "MACD":
+        strategy_params = {
+            "fast": st.sidebar.slider("⚡ Fast EMA", 5, 20, 12,
+                                    help="빠른 지수이동평균 기간"),
+            "slow": st.sidebar.slider("🐌 Slow EMA", 20, 50, 26,
+                                    help="느린 지수이동평균 기간"),
+            "signal": st.sidebar.slider("📶 Signal EMA", 5, 15, 9,
+                                      help="시그널선 평활화 기간")
+        }
+        st.sidebar.info("💡 MACD선이 시그널선을 상향돌파시 매수, 하향돌파시 매도")
+        
+    elif strategy_name == "Stochastic":
+        strategy_params = {
+            "k_period": st.sidebar.slider("📊 %K Period", 5, 20, 14,
+                                        help="스토캐스틱 %K 계산 기간"),
+            "d_period": st.sidebar.slider("📈 %D Period", 1, 10, 3,
+                                        help="스토캐스틱 %D 평활화 기간"),
+            "oversold": st.sidebar.slider("📉 Oversold Level", 10, 30, 20,
+                                        help="과매도 기준선"),
+            "overbought": st.sidebar.slider("📈 Overbought Level", 70, 90, 80,
+                                          help="과매수 기준선")
+        }
+        st.sidebar.info("💡 과매도 구간에서 %K가 %D를 상향돌파시 매수, 과매수 구간에서 하향돌파시 매도")
+    
+    # 손절매 설정
+    st.sidebar.subheader("🛡️ Risk Management")
+    
+    # 손절매 활성화
+    enable_stop_loss = st.sidebar.checkbox("Enable Stop Loss", value=False)
+    
+    stop_loss_pct = None
+    support_resistance_lookback = None
+    
+    if enable_stop_loss:
+        stop_loss_type = st.sidebar.selectbox(
+            "Stop Loss Type", 
+            ["Percentage Based", "Support/Resistance Based", "Both"]
+        )
+        
+        if stop_loss_type in ["Percentage Based", "Both"]:
+            stop_loss_pct = st.sidebar.slider(
+                "📉 Stop Loss (%)", 
+                1.0, 20.0, 5.0, 0.5,
+                help="손실이 이 비율에 도달하면 자동 매도"
+            )
+        
+        if stop_loss_type in ["Support/Resistance Based", "Both"]:
+            support_resistance_lookback = st.sidebar.slider(
+                "📊 Lookback Period", 
+                10, 50, 20,
+                help="지지/저항선 계산을 위한 과거 기간"
+            )
+            st.sidebar.info("💡 지지선을 2% 하향 돌파시 자동 매도")
     
     # 초기 자본
     initial_capital = st.sidebar.number_input("💰 Initial Capital ($)", min_value=1000, max_value=1000000, value=10000, step=1000)
@@ -467,35 +462,26 @@ def main():
             st.error(f"Could not load data for {symbol}. Please check the symbol.")
             return
         
-        # 백테스터 생성
-        backtester = StreamlitBacktester()
-        backtester.initial_capital = initial_capital
-        
         # 전략 실행
         with st.spinner("Running backtest..."):
-            if strategy_name == "Moving Average":
-                strategy_data = backtester.calculate_ma_signals(
-                    data, 
-                    strategy_params['short_window'], 
-                    strategy_params['long_window']
-                )
-            elif strategy_name == "RSI":
-                strategy_data = backtester.calculate_rsi_signals(
-                    data,
-                    strategy_params['period'],
-                    strategy_params['oversold'],
-                    strategy_params['overbought']
-                )
-            elif strategy_name == "Bollinger Bands":
-                strategy_data = backtester.calculate_bollinger_signals(
-                    data,
-                    strategy_params['period'],
-                    strategy_params['std_dev']
-                )
+            # 전략 신호 계산
+            strategy_data = backtester.calculate_strategy_signals(strategy_name, data, **strategy_params)
             
-            # 백테스트 실행
-            result = backtester.run_backtest(data, strategy_data)
+            # 백테스트 실행 (손절매 설정 포함)
+            result = backtester.run_backtest(
+                data, strategy_data, initial_capital, 
+                stop_loss_pct, support_resistance_lookback
+            )
             metrics = backtester.calculate_metrics(result)
+            
+            # 거래 유효성 검증
+            validation = backtester.validate_trades(result)
+            if not validation['is_valid']:
+                st.warning("⚠️ 거래 유효성 검증에서 문제가 발견되었습니다:")
+                for issue in validation['issues']:
+                    st.error(f"• {issue}")
+            else:
+                st.success("✅ 거래 유효성 검증 통과")
         
         # 결과 표시
         if metrics:
@@ -584,16 +570,29 @@ def main():
                 trades_df['shares'] = trades_df['shares'].round(2)
                 trades_df['portfolio_value'] = trades_df['portfolio_value'].round(2)
                 
+                # 손절매 정보가 있으면 표시
+                if 'reason' in trades_df.columns:
+                    trades_df['reason'] = trades_df['reason'].fillna('-')
+                
                 # 색상 코딩
                 def color_trades(val):
                     if val == 'BUY':
                         return 'background-color: #d4edda'
                     elif val == 'SELL':
                         return 'background-color: #f8d7da'
+                    elif val == 'STOP_LOSS':
+                        return 'background-color: #fff3cd'
                     return ''
                 
                 styled_trades = trades_df.style.applymap(color_trades, subset=['action'])
                 st.dataframe(styled_trades, use_container_width=True, hide_index=True)
+                
+                # 손절매 통계
+                stop_loss_trades = [t for t in result['trades'] if t.get('action') == 'STOP_LOSS']
+                if stop_loss_trades:
+                    st.info(f"🛡️ Stop Loss activated {len(stop_loss_trades)} times")
+                    for trade in stop_loss_trades:
+                        st.caption(f"• {trade['date'].strftime('%Y-%m-%d')}: {trade.get('reason', 'Stop Loss')}")
             
             # 다운로드 버튼
             st.subheader("💾 Export Results")

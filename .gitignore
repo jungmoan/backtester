@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+*.log
+*.sqlite3
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# Environments
+.env
+.venv/
+venv/
+ENV/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results & Data
+results/
+*.csv
+*.png
+*.pkl
+*.h5
+*.db
+
+# Cache
+.cache/
+*.cache
+
+# Misc
+*.bak
+*.swp
+*.tmp
+
+# Ignore secrets
+secrets.*
+config.json

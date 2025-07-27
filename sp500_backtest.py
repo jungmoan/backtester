@@ -175,7 +175,7 @@ def main():
     successful_tests = 0
     failed_tests = 0
     
-    test_symbols = list(all_data.keys())[:10]  # 상위 10개 종목만 테스트 (예시)
+    test_symbols = list(all_data.keys())
     for symbol in test_symbols:
         print(f"\n📊 {symbol} 테스트 중...")
         

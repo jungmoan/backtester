@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple
 from abc import ABC, abstractmethod
+import pandas_ta as ta
 
 
 class BaseStrategy(ABC):
@@ -287,6 +288,128 @@ class StochasticStrategy(BaseStrategy):
         return self._finalize_signals(df)
 
 
+def _calculate_squeeze_momentum(df, bb_length=20, kc_length=20, kc_mult=1.5, use_tr=True):
+    """
+    LazyBear의 Squeeze Momentum Indicator 로직을 기반으로 스퀴즈 모멘텀을 계산합니다.
+    pandas-ta의 기본 squeeze와 달라 직접 구현합니다.
+    """
+    df_copy = df.copy()
+    
+    # 1. 볼린저 밴드 (켈트너 채널 승수 사용)
+    basis = ta.sma(df_copy['Close'], length=bb_length)
+    dev = kc_mult * ta.stdev(df_copy['Close'], length=bb_length)
+    df_copy['BBU_LB'] = basis + dev
+    df_copy['BBL_LB'] = basis - dev
+
+    # 2. 켈트너 채널 (True Range의 SMA 사용)
+    ma = ta.sma(df_copy['Close'], length=kc_length)
+    tr = ta.true_range(df_copy['High'], df_copy['Low'], df_copy['Close']) if use_tr else (df_copy['High'] - df_copy['Low'])
+    rangema = ta.sma(tr, length=kc_length)
+    df_copy['KCU_LB'] = ma + rangema * kc_mult
+    df_copy['KCL_LB'] = ma - rangema * kc_mult
+
+    # 3. 스퀴즈 ON/OFF/NO 조건
+    df_copy['SQZ_ON_CUSTOM'] = (df_copy['BBL_LB'] > df_copy['KCL_LB']) & (df_copy['BBU_LB'] < df_copy['KCU_LB'])
+    df_copy['SQZ_OFF_CUSTOM'] = (df_copy['BBL_LB'] < df_copy['KCL_LB']) & (df_copy['BBU_LB'] > df_copy['KCU_LB'])
+    df_copy['SQZ_NO_CUSTOM'] = ~df_copy['SQZ_ON_CUSTOM'] & ~df_copy['SQZ_OFF_CUSTOM']
+
+    # 4. 모멘텀 값 (Linear Regression)
+    highest_high = df_copy['High'].rolling(kc_length).max()
+    lowest_low = df_copy['Low'].rolling(kc_length).min()
+    sma_close = ta.sma(df_copy['Close'], length=kc_length)
+    mom_source = df_copy['Close'] - ((highest_high + lowest_low) / 2 + sma_close) / 2
+    df_copy['SQZ_VAL_CUSTOM'] = ta.linreg(close=mom_source, length=kc_length)
+
+    return df_copy
+
+
+class SqueezeMomentumStrategy(BaseStrategy):
+    """Squeeze Momentum Indicator 전략 (LazyBear 완벽 구현)"""
+    
+    def __init__(self):
+        super().__init__("Squeeze Momentum")
+    
+    def calculate_signals(self, data: pd.DataFrame, bb_period: int = 20, bb_std: float = 2.0, 
+                         kc_period: int = 20, kc_mult: float = 1.5, momentum_period: int = 12) -> pd.DataFrame:
+        """Squeeze Momentum 신호 계산 (LazyBear 완벽 구현)
+        
+        Args:
+            data: OHLCV 데이터
+            bb_period: 볼린저 밴드 기간 (bb_length)
+            bb_std: 사용하지 않음 (kc_mult를 사용)
+            kc_period: 켈트나 채널 기간 (kc_length)  
+            kc_mult: 켈트나 채널 승수
+            momentum_period: 사용하지 않음 (호환성을 위해 유지)
+            
+        Returns:
+            신호가 추가된 데이터프레임
+        """
+        # 완벽한 LazyBear 함수 사용
+        df = _calculate_squeeze_momentum(data, bb_period, kc_period, kc_mult, use_tr=True)
+        
+        # 컬럼명 통일
+        df['BB_Upper'] = df['BBU_LB']
+        df['BB_Lower'] = df['BBL_LB']
+        df['KC_Upper'] = df['KCU_LB']
+        df['KC_Lower'] = df['KCL_LB']
+        df['SQZ_ON'] = df['SQZ_ON_CUSTOM']
+        df['SQZ_OFF'] = df['SQZ_OFF_CUSTOM']
+        df['NO_SQZ'] = df['SQZ_NO_CUSTOM']
+        df['SQZ_VAL'] = df['SQZ_VAL_CUSTOM']
+        
+        # 디버깅: Squeeze 상태 통계 출력
+        total_rows = len(df)
+        sqz_on_count = df['SQZ_ON'].sum()
+        sqz_off_count = df['SQZ_OFF'].sum() 
+        no_sqz_count = df['NO_SQZ'].sum()
+        
+        print(f"Squeeze 상태 통계 (LazyBear 완벽 구현):")
+        print(f"  Total rows: {total_rows}")
+        print(f"  SQZ_ON: {sqz_on_count} ({sqz_on_count/total_rows*100:.1f}%)")
+        print(f"  SQZ_OFF: {sqz_off_count} ({sqz_off_count/total_rows*100:.1f}%)")
+        print(f"  NO_SQZ: {no_sqz_count} ({no_sqz_count/total_rows*100:.1f}%)")
+        
+        # 모멘텀 방향 및 색상 정보
+        df['SQZ_VAL_PREV'] = df['SQZ_VAL'].shift(1)
+        df['SQZ_INCREASING'] = df['SQZ_VAL'] > df['SQZ_VAL_PREV']
+        df['SQZ_POSITIVE'] = df['SQZ_VAL'] > 0
+        
+        # 변동성 및 모멘텀 상태 (LazyBear 로직)
+        df['VOLA_START'] = (~df['NO_SQZ'] & ~df['SQZ_ON']).astype(int)  # 변동성 시작
+        df['MOMENTUM_POS'] = df['SQZ_POSITIVE'].astype(int)  # 모멘텀 방향
+        
+        # 변화점 감지
+        df['VOLA_CHANGE'] = df['VOLA_START'].diff() == 1
+        df['MOMENTUM_CHANGE'] = df['MOMENTUM_POS'].diff() != 0
+        
+        # 신호 생성 (LazyBear 로직)
+        df['IS_LONG'] = df['VOLA_CHANGE'] & df['SQZ_POSITIVE']
+        df['IS_SHORT'] = df['VOLA_CHANGE'] & ~df['SQZ_POSITIVE']
+        
+        # 포지션 추적을 위한 변수
+        df = self._init_signal_columns(df)
+        current_position = 0
+        
+        for i in range(1, len(df)):
+            # 데이터 유효성 검사
+            if pd.isna(df['SQZ_VAL'].iloc[i]) or pd.isna(df['VOLA_CHANGE'].iloc[i]):
+                continue
+            
+            # 매수 조건: 변동성 시작 + 양의 모멘텀
+            if current_position == 0 and df['IS_LONG'].iloc[i]:
+                current_position = 1
+                df.iloc[i, df.columns.get_loc('Signal')] = 1
+                
+            # 매도 조건: 모멘텀 변화 (양수에서 음수로 또는 그 반대)
+            elif current_position == 1 and df['MOMENTUM_CHANGE'].iloc[i]:
+                current_position = 0
+                df.iloc[i, df.columns.get_loc('Signal')] = -1
+            
+            df.iloc[i, df.columns.get_loc('Position')] = current_position
+        
+        return self._finalize_signals(df)
+
+
 class StrategyManager:
     """전략 관리자 클래스"""
     
@@ -296,7 +419,8 @@ class StrategyManager:
             "RSI": RSIStrategy(),
             "Bollinger Bands": BollingerBandsStrategy(),
             "MACD": MACDStrategy(),
-            "Stochastic": StochasticStrategy()
+            "Stochastic": StochasticStrategy(),
+            "Squeeze Momentum": SqueezeMomentumStrategy()
         }
     
     def get_strategy(self, name: str) -> BaseStrategy:

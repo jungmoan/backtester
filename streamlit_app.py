@@ -122,6 +122,23 @@ def get_strategy_description(strategy_name: str) -> str:
         
         **장점**: 단기 모멘텀 변화에 민감, 횡보장에서 효과적
         **단점**: 노이즈가 많아 거짓 신호 발생 가능성 높음
+        """,
+        
+        "Squeeze Momentum": """
+        **Squeeze Momentum Indicator 전략 (TTM Squeeze)**
+        
+        볼린저 밴드와 켈트너 채널의 압축 상태를 감지하여 가격 폭발 시점을 예측합니다.
+        
+        📈 **매수 신호**: Squeeze 해제 후 모멘텀이 양수로 전환
+        📉 **매도 신호**: 모멘텀이 음수로 전환
+        
+        **원리**: 
+        - Squeeze 상태: 볼린저 밴드가 켈트나 채널 내부에 위치 (변동성 축소)
+        - Squeeze 해제: 변동성 폭발 직전 신호
+        - 모멘텀: 가격 움직임의 방향성 확인
+        
+        **장점**: 큰 가격 움직임을 사전에 감지, 높은 수익률 잠재력
+        **단점**: 신호 빈도가 낮음, 거짓 돌파 가능성
         """
     }
     return descriptions.get(strategy_name, "")
@@ -134,9 +151,70 @@ def load_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
         data = ticker.history(period=period)
         if data.empty:
             return pd.DataFrame()
+        
+        # 주말 및 거래 없는 날 제거 (토요일=5, 일요일=6)
+        data = data[data.index.dayofweek < 5]
+        
+        # 거래량이 0인 날도 제거 (공휴일 등)
+        data = data[data['Volume'] > 0]
+        
+        # 인덱스를 날짜 형식으로 확실히 변환
+        data.index = pd.to_datetime(data.index)
+        
         return data
     except:
         return pd.DataFrame()
+
+def get_squeeze_periods(strategy_data: pd.DataFrame) -> List[Dict]:
+    """Squeeze 구간을 연속된 기간으로 그룹화"""
+    if 'SQZ_ON' not in strategy_data.columns:
+        return []
+    
+    periods = []
+    current_period = None
+    
+    for i, (date, row) in enumerate(strategy_data.iterrows()):
+        if pd.isna(row['SQZ_ON']):
+            continue
+            
+        # Squeeze 상태 결정
+        if row['SQZ_ON']:
+            state = 'squeeze_on'
+            color = 'black'
+            opacity = 0.3
+        elif 'NO_SQZ' in strategy_data.columns and row['NO_SQZ']:
+            state = 'no_squeeze'
+            color = 'blue'
+            opacity = 0.2
+        else:
+            state = 'squeeze_off'
+            color = 'gray'
+            opacity = 0.1
+        
+        # 새로운 구간 시작 또는 기존 구간 연장
+        if current_period is None or current_period['state'] != state:
+            # 이전 구간 종료
+            if current_period is not None:
+                current_period['end'] = strategy_data.index[i-1] if i > 0 else date
+                periods.append(current_period)
+            
+            # 새 구간 시작
+            current_period = {
+                'state': state,
+                'start': date,
+                'end': date,
+                'color': color,
+                'opacity': opacity
+            }
+        else:
+            # 기존 구간 연장
+            current_period['end'] = date
+    
+    # 마지막 구간 처리
+    if current_period is not None:
+        periods.append(current_period)
+    
+    return periods
 
 def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals: List, strategy_data: pd.DataFrame, strategy_name: str):
     """캔들스틱 차트 + 시그널 생성"""
@@ -171,7 +249,7 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
                 x=buy_dates,
                 y=buy_prices,
                 mode='markers',
-                marker=dict(color='green', size=12, symbol='triangle-up'),
+                marker=dict(color='lime', size=12, symbol='triangle-up'),
                 name='Buy Signal'
             ),
             row=1, col=1
@@ -289,6 +367,134 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
             fig.add_hline(y=80, line_dash="dash", line_color="red", row=3, col=1)
             fig.add_hline(y=20, line_dash="dash", line_color="green", row=3, col=1)
     
+    elif strategy_name == "Squeeze Momentum":
+        # Squeeze 구간을 연속된 기간으로 표시
+        squeeze_periods = get_squeeze_periods(strategy_data)
+        
+        for period in squeeze_periods:
+            if period['state'] == 'squeeze_on':
+                label = 'Squeeze ON'
+            elif period['state'] == 'no_squeeze':
+                label = 'No Squeeze'
+            else:
+                label = 'Squeeze OFF'
+                
+            # 가격 차트에 배경색 추가
+            fig.add_vrect(
+                x0=period['start'], 
+                x1=period['end'],
+                fillcolor=period['color'], 
+                opacity=period['opacity'],
+                layer="below", 
+                line_width=0,
+                annotation_text=label if period['end'] != period['start'] else "",
+                annotation_position="top left",
+                row=1, col=1
+            )
+            
+            # 인디케이터 차트에도 배경색 추가
+            fig.add_vrect(
+                x0=period['start'], 
+                x1=period['end'],
+                fillcolor=period['color'], 
+                opacity=period['opacity'],
+                layer="below", 
+                line_width=0,
+                row=3, col=1
+            )
+        
+        # 모멘텀 히스토그램 (LazyBear 스타일)
+        if 'SQZ_VAL' in strategy_data.columns:
+            # NaN 값 제거
+            valid_data = strategy_data.dropna(subset=['SQZ_VAL'])
+            
+            # 색상 계산 (LazyBear 로직)
+            colors = []
+            for i in range(len(valid_data)):
+                val = valid_data['SQZ_VAL'].iloc[i]
+                prev_val = valid_data['SQZ_VAL'].iloc[i-1] if i > 0 else 0
+                
+                if pd.isna(val):
+                    colors.append('gray')
+                    continue
+                
+                if val > 0:
+                    # 양수: 증가하면 lime, 감소하면 green
+                    if val > prev_val:
+                        colors.append('lime')
+                    else:
+                        colors.append('green')
+                else:
+                    # 음수: 감소하면 red, 증가하면 maroon
+                    if val < prev_val:
+                        colors.append('red')
+                    else:
+                        colors.append('maroon')
+            
+            fig.add_trace(
+                go.Bar(
+                    x=valid_data.index, 
+                    y=valid_data['SQZ_VAL'], 
+                    name='Momentum', 
+                    marker_color=colors,
+                    showlegend=True
+                ),
+                row=3, col=1
+            )
+            fig.add_hline(y=0, line_dash="dash", line_color="black", row=3, col=1)
+        
+        # 볼린저 밴드와 켈트나 채널 표시
+        if all(col in strategy_data.columns for col in ['BB_Upper', 'BB_Lower', 'KC_Upper', 'KC_Lower']):
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['BB_Upper'], 
+                          name='BB Upper', line=dict(color='blue', dash='dash'), opacity=0.7),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['BB_Lower'], 
+                          name='BB Lower', line=dict(color='blue', dash='dash'), opacity=0.7),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['KC_Upper'], 
+                          name='KC Upper', line=dict(color='red', dash='dot'), opacity=0.7),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['KC_Lower'], 
+                          name='KC Lower', line=dict(color='red', dash='dot'), opacity=0.7),
+                row=1, col=1
+            )
+            
+        # Squeeze 상태 범례 추가
+        if squeeze_periods:
+            # 각 상태별로 하나씩만 범례에 추가
+            states_added = set()
+            for period in squeeze_periods:
+                if period['state'] not in states_added:
+                    if period['state'] == 'squeeze_on':
+                        label = '⚫ Squeeze ON'
+                        color = 'black'
+                    elif period['state'] == 'no_squeeze':
+                        label = '🔵 No Squeeze'
+                        color = 'blue'
+                    else:
+                        label = '⚪ Squeeze OFF'
+                        color = 'gray'
+                    
+                    # 빈 scatter로 범례만 추가
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[None], y=[None],
+                            mode='markers',
+                            marker=dict(color=color, size=10),
+                            name=label,
+                            showlegend=True
+                        ),
+                        row=1, col=1
+                    )
+                    states_added.add(period['state'])
+    
     # 거래량
     fig.add_trace(
         go.Bar(x=data.index, y=data['Volume'], name='Volume', marker_color='lightblue'),
@@ -299,7 +505,29 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
         title=f"{strategy_name} Strategy Backtest",
         xaxis_rangeslider_visible=False,
         height=800,
-        showlegend=True
+        showlegend=True,
+        # 연속 시계열 차트 설정 (주말/공휴일 자동 제거)
+        xaxis=dict(
+            type='date',  # 날짜 타입으로 설정
+            tickformat='%Y-%m-%d',
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),  # 주말 제거
+            ]
+        ),
+        xaxis2=dict(
+            type='date',
+            tickformat='%Y-%m-%d',
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),  # 주말 제거
+            ]
+        ),
+        xaxis3=dict(
+            type='date',
+            tickformat='%Y-%m-%d',
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),  # 주말 제거
+            ]
+        )
     )
     
     return fig
@@ -308,7 +536,7 @@ def main():
     """메인 애플리케이션"""
     
     # 헤더
-    st.title("🚀 Smart Backtester")
+    st.title("🚀 Smart Backtester v3")
     st.markdown("### 📈 Professional Trading Strategy Backtesting Platform")
     
     # 사이드바 - 설정
@@ -411,6 +639,21 @@ def main():
                                           help="과매수 기준선")
         }
         st.sidebar.info("💡 과매도 구간에서 %K가 %D를 상향돌파시 매수, 과매수 구간에서 하향돌파시 매도")
+        
+    elif strategy_name == "Squeeze Momentum":
+        strategy_params = {
+            "bb_period": st.sidebar.slider("📊 Bollinger Period", 10, 30, 20,
+                                         help="볼린저 밴드 계산 기간"),
+            "bb_std": st.sidebar.slider("📏 BB Std Dev", 1.5, 3.0, 2.0, 0.1,
+                                      help="볼린저 밴드 표준편차 승수"),
+            "kc_period": st.sidebar.slider("📈 Keltner Period", 10, 30, 20,
+                                         help="켈트나 채널 계산 기간"),
+            "kc_mult": st.sidebar.slider("⚡ Keltner Multiplier", 1.0, 2.5, 1.5, 0.1,
+                                       help="켈트나 채널 ATR 승수"),
+            "momentum_period": st.sidebar.slider("🚀 Momentum Period", 8, 20, 12,
+                                                help="모멘텀 계산 기간")
+        }
+        st.sidebar.info("💡 Squeeze 해제 후 모멘텀이 양수로 전환시 매수, 음수로 전환시 매도")
     
     # 손절매 설정
     st.sidebar.subheader("🛡️ Risk Management")
@@ -540,6 +783,15 @@ def main():
                     title="Portfolio Value Over Time"
                 )
                 fig_portfolio.add_hline(y=initial_capital, line_dash="dash", annotation_text="Initial Capital")
+                # 주말/공휴일 제거 설정
+                fig_portfolio.update_layout(
+                    xaxis=dict(
+                        type='date',
+                        rangebreaks=[
+                            dict(bounds=["sat", "mon"]),  # 주말 제거
+                        ]
+                    )
+                )
                 st.plotly_chart(fig_portfolio, use_container_width=True)
             
             with col2:
@@ -655,7 +907,17 @@ def main():
                 low=sample_data['Low'],
                 close=sample_data['Close']
             ))
-            fig_sample.update_layout(title="Sample Chart", xaxis_rangeslider_visible=False, height=400)
+            fig_sample.update_layout(
+                title="Sample Chart", 
+                xaxis_rangeslider_visible=False, 
+                height=400,
+                xaxis=dict(
+                    type='date',
+                    rangebreaks=[
+                        dict(bounds=["sat", "mon"]),  # 주말 제거
+                    ]
+                )
+            )
             st.plotly_chart(fig_sample, use_container_width=True)
 
 if __name__ == "__main__":

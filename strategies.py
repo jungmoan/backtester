@@ -295,13 +295,25 @@ def _calculate_squeeze_momentum(df, bb_length=20, kc_length=20, kc_mult=1.5, use
     """
     df_copy = df.copy()
     
+    # 입력 데이터 검증
+    if len(df_copy) < max(bb_length, kc_length) + 10:
+        raise ValueError(f"데이터 길이가 부족합니다. 최소 {max(bb_length, kc_length) + 10}개 필요, 현재 {len(df_copy)}개")
+    
+    # 필수 컬럼 확인
+    required_columns = ['High', 'Low', 'Close']
+    for col in required_columns:
+        if col not in df_copy.columns:
+            raise ValueError(f"필수 컬럼 '{col}'이 데이터에 없습니다.")
+        if df_copy[col].isnull().sum() > len(df_copy) * 0.1:  # 10% 이상 NaN이면 에러
+            raise ValueError(f"컬럼 '{col}'에 너무 많은 NaN 값이 있습니다.")
+    
     # 1. 볼린저 밴드 (켈트너 채널 승수 사용)
     basis = ta.sma(df_copy['Close'], length=bb_length)
     dev = kc_mult * ta.stdev(df_copy['Close'], length=bb_length)
     df_copy['BBU_LB'] = basis + dev
     df_copy['BBL_LB'] = basis - dev
 
-    # 2. 켈트너 채널 (True Range의 SMA 사용)
+    # 2. 켈트나 채널 (True Range의 SMA 사용)
     ma = ta.sma(df_copy['Close'], length=kc_length)
     tr = ta.true_range(df_copy['High'], df_copy['Low'], df_copy['Close']) if use_tr else (df_copy['High'] - df_copy['Low'])
     rangema = ta.sma(tr, length=kc_length)
@@ -318,7 +330,12 @@ def _calculate_squeeze_momentum(df, bb_length=20, kc_length=20, kc_mult=1.5, use
     lowest_low = df_copy['Low'].rolling(kc_length).min()
     sma_close = ta.sma(df_copy['Close'], length=kc_length)
     mom_source = df_copy['Close'] - ((highest_high + lowest_low) / 2 + sma_close) / 2
-    df_copy['SQZ_VAL_CUSTOM'] = ta.linreg(close=mom_source, length=kc_length)
+    
+    # NaN 체크 후 linreg 계산
+    if mom_source.isnull().sum() > len(mom_source) * 0.5:
+        raise ValueError("모멘텀 소스 계산에서 너무 많은 NaN 값이 발생했습니다.")
+    
+    df_copy['SQZ_VAL_CUSTOM'] = ta.linreg(mom_source, length=kc_length)
 
     return df_copy
 
@@ -330,22 +347,30 @@ class SqueezeMomentumStrategy(BaseStrategy):
         super().__init__("Squeeze Momentum")
     
     def calculate_signals(self, data: pd.DataFrame, bb_period: int = 20, bb_std: float = 2.0, 
-                         kc_period: int = 20, kc_mult: float = 1.5, momentum_period: int = 12) -> pd.DataFrame:
-        """Squeeze Momentum 신호 계산 (LazyBear 완벽 구현)
+                         kc_period: int = 20, kc_mult: float = 1.5, momentum_period: int = 12, 
+                         ema_period: int = 200) -> pd.DataFrame:
+        """Squeeze Momentum 신호 계산 (LazyBear 완벽 구현 + 200일 EMA 필터)
         
         Args:
             data: OHLCV 데이터
             bb_period: 볼린저 밴드 기간 (bb_length)
-            bb_std: 사용하지 않음 (kc_mult를 사용)
+            bb_std: 볼린저 밴드 표준편차 승수 (실제로는 kc_mult 사용, 호환성을 위해 유지)
             kc_period: 켈트나 채널 기간 (kc_length)  
             kc_mult: 켈트나 채널 승수
             momentum_period: 사용하지 않음 (호환성을 위해 유지)
+            ema_period: EMA 필터 기간 (기본값: 200일)
             
         Returns:
             신호가 추가된 데이터프레임
         """
         # 완벽한 LazyBear 함수 사용
         df = _calculate_squeeze_momentum(data, bb_period, kc_period, kc_mult, use_tr=True)
+        
+        # 200일 EMA 계산
+        df['EMA_200'] = ta.ema(df['Close'], length=ema_period)
+        
+        # NaN 값 처리 후 비교 연산
+        df['Above_EMA'] = (df['Close'] > df['EMA_200']).fillna(False)
         
         # 컬럼명 통일
         df['BB_Upper'] = df['BBU_LB']
@@ -391,12 +416,12 @@ class SqueezeMomentumStrategy(BaseStrategy):
         current_position = 0
         
         for i in range(1, len(df)):
-            # 데이터 유효성 검사
+            # 데이터 유효성 검사 (EMA_200이 NaN인 경우 Above_EMA는 False로 처리됨)
             if pd.isna(df['SQZ_VAL'].iloc[i]) or pd.isna(df['VOLA_CHANGE'].iloc[i]):
                 continue
             
-            # 매수 조건: 변동성 시작 + 양의 모멘텀
-            if current_position == 0 and df['IS_LONG'].iloc[i]:
+            # 매수 조건: 변동성 시작 + 양의 모멘텀 + 주가가 200일 EMA 위에 위치
+            if current_position == 0 and df['IS_LONG'].iloc[i] and df['Above_EMA'].iloc[i]:
                 current_position = 1
                 df.iloc[i, df.columns.get_loc('Signal')] = 1
                 

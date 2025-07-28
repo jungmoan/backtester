@@ -18,13 +18,15 @@ class BacktestEngine:
     def __init__(self, initial_capital: float = 10000):
         self.initial_capital = initial_capital
         
-    def run_backtest(self, data: pd.DataFrame, strategy_data: pd.DataFrame, stop_loss_pct: float = None, support_resistance_lookback: int = None) -> Dict:
+    def run_backtest(self, data: pd.DataFrame, strategy_data: pd.DataFrame, stop_loss_pct: float = None, 
+                     take_profit_pct: float = None, support_resistance_lookback: int = None) -> Dict:
         """백테스트 실행
         
         Args:
             data: 원본 OHLCV 데이터
             strategy_data: 전략 신호가 포함된 데이터
             stop_loss_pct: 손절매 비율 (예: 5.0 = 5% 손실시 매도)
+            take_profit_pct: 익절매 비율 (예: 10.0 = 10% 수익시 매도)
             support_resistance_lookback: 지지/저항선 계산을 위한 lookback 기간
             
         Returns:
@@ -46,43 +48,58 @@ class BacktestEngine:
         for i, (date, row) in enumerate(strategy_data.iterrows()):
             price = row['Close']
             signal = row.get('Signal', 0)
+            exit_triggered_today = False  # 오늘 리스크 관리로 인한 종료가 있었는지 추적
             
-            # 손절매 체크 (포지션이 있을 때만)
+            # 손절매 및 익절매 체크 (포지션이 있을 때만)
             if position > 0:
-                stop_loss_triggered = False
-                stop_loss_reason = ""
+                exit_triggered = False
+                exit_reason = ""
+                exit_type = ""
                 
                 # 1. 비율 기반 손절매
                 if stop_loss_pct and buy_price > 0:
                     loss_pct = ((buy_price - price) / buy_price) * 100
                     if loss_pct >= stop_loss_pct:
-                        stop_loss_triggered = True
-                        stop_loss_reason = f"Stop Loss ({loss_pct:.2f}%)"
+                        exit_triggered = True
+                        exit_reason = f"Stop Loss ({loss_pct:.2f}%)"
+                        exit_type = "STOP_LOSS"
                 
-                # 2. 지지선 기반 손절매 (비율 기반 손절매가 발생하지 않은 경우에만)
-                if not stop_loss_triggered and support_resistance_lookback and i < len(support_levels):
+                # 2. 비율 기반 익절매 (손절매가 발생하지 않은 경우에만)
+                if not exit_triggered and take_profit_pct and buy_price > 0:
+                    profit_pct = ((price - buy_price) / buy_price) * 100
+                    if profit_pct >= take_profit_pct:
+                        exit_triggered = True
+                        exit_reason = f"Take Profit ({profit_pct:.2f}%)"
+                        exit_type = "TAKE_PROFIT"
+                
+                # 3. 지지선 기반 손절매 (다른 종료 조건이 없는 경우에만)
+                if not exit_triggered and support_resistance_lookback and i < len(support_levels):
                     current_support = support_levels[i]
                     if current_support > 0 and price < current_support * 0.98:  # 지지선 2% 하향 돌파
-                        stop_loss_triggered = True
-                        stop_loss_reason = f"Support Break ({current_support:.2f})"
+                        exit_triggered = True
+                        exit_reason = f"Support Break ({current_support:.2f})"
+                        exit_type = "STOP_LOSS"
                 
-                # 손절매 실행
-                if stop_loss_triggered:
+                # 포지션 종료 실행
+                if exit_triggered:
                     cash += position * price
                     trades.append({
                         'date': date,
-                        'action': 'STOP_LOSS',
+                        'action': exit_type,
                         'price': price,
                         'shares': position,
                         'portfolio_value': cash,
-                        'reason': stop_loss_reason
+                        'reason': exit_reason
                     })
-                    sell_signals.append({'date': date, 'price': price, 'type': 'stop_loss'})
+                    
+                    # 신호 타입에 따라 다른 색상으로 표시
+                    signal_type = 'take_profit' if exit_type == 'TAKE_PROFIT' else 'stop_loss'
+                    sell_signals.append({'date': date, 'price': price, 'type': signal_type})
                     position = 0
                     buy_price = 0
-                    # 손절매가 발생하면 이번 루프에서는 다른 신호 처리하지 않음
+                    exit_triggered_today = True  # 오늘 리스크 관리로 종료됨
                 
-                # 손절매가 발생하지 않은 경우에만 매도 신호 처리
+                # 손절매/익절매가 발생하지 않은 경우에만 매도 신호 처리
                 elif signal == -1:
                     cash += position * price
                     trades.append({
@@ -96,8 +113,8 @@ class BacktestEngine:
                     position = 0
                     buy_price = 0
             
-            # 매수 신호 처리 (포지션이 없을 때만)
-            elif position == 0 and signal == 1:
+            # 매수 신호 처리 (포지션이 없고, 오늘 리스크 관리로 종료되지 않은 경우에만)
+            elif position == 0 and signal == 1 and not exit_triggered_today:
                 shares = (cash * 0.95) / price  # 95% 투자 (수수료 고려)
                 cash -= shares * price
                 position = shares
@@ -201,7 +218,7 @@ class BacktestEngine:
                     issues.append(f"Trade {i}: BUY signal when already holding position")
                 position = trade['shares']
                 
-            elif action in ['SELL', 'STOP_LOSS']:
+            elif action in ['SELL', 'STOP_LOSS', 'TAKE_PROFIT']:
                 if position <= 0:
                     issues.append(f"Trade {i}: {action} signal when no position held")
                 position = 0
@@ -212,7 +229,8 @@ class BacktestEngine:
             'total_trades': len(trades),
             'buy_trades': len([t for t in trades if t['action'] == 'BUY']),
             'sell_trades': len([t for t in trades if t['action'] == 'SELL']),
-            'stop_loss_trades': len([t for t in trades if t['action'] == 'STOP_LOSS'])
+            'stop_loss_trades': len([t for t in trades if t['action'] == 'STOP_LOSS']),
+            'take_profit_trades': len([t for t in trades if t['action'] == 'TAKE_PROFIT'])
         }
     
     def calculate_metrics(self, result: Dict) -> Dict:
@@ -254,9 +272,9 @@ class BacktestEngine:
         
         # 거래 분석
         buy_trades = [t for t in trades if t['action'] == 'BUY']
-        sell_trades = [t for t in trades if t['action'] in ['SELL', 'STOP_LOSS']]
+        sell_trades = [t for t in trades if t['action'] in ['SELL', 'STOP_LOSS', 'TAKE_PROFIT']]
         
-        # 승률 계산 (손절매는 패배로 처리)
+        # 승률 계산 (손절매는 패배로 처리, 익절매는 승리로 처리)
         trade_returns = []
         for i in range(min(len(buy_trades), len(sell_trades))):
             buy_price = buy_trades[i]['price']
@@ -267,6 +285,10 @@ class BacktestEngine:
             # 손절매는 무조건 패배로 처리 (음수 수익률로 강제 설정)
             if sell_trade['action'] == 'STOP_LOSS' and trade_return > 0:
                 trade_return = -abs(trade_return)
+            
+            # 익절매는 무조건 승리로 처리 (양수 수익률로 강제 설정)
+            elif sell_trade['action'] == 'TAKE_PROFIT' and trade_return < 0:
+                trade_return = abs(trade_return)
             
             trade_returns.append(trade_return)
         

@@ -13,6 +13,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
+from typing import List, Dict, Tuple
 from datetime import datetime, timedelta
 import time
 from typing import Dict, List, Tuple
@@ -48,10 +49,10 @@ class StreamlitBacktester:
         return self.strategy_manager.calculate_signals(strategy_name, data, **params)
     
     def run_backtest(self, data: pd.DataFrame, strategy_data: pd.DataFrame, initial_capital: float, 
-                     stop_loss_pct: float = None, support_resistance_lookback: int = None) -> Dict:
+                     stop_loss_pct: float = None, take_profit_pct: float = None, support_resistance_lookback: int = None) -> Dict:
         """백테스트 실행"""
         self.backtest_engine.initial_capital = initial_capital
-        return self.backtest_engine.run_backtest(data, strategy_data, stop_loss_pct, support_resistance_lookback)
+        return self.backtest_engine.run_backtest(data, strategy_data, stop_loss_pct, take_profit_pct, support_resistance_lookback)
     
     def calculate_metrics(self, result: Dict) -> Dict:
         """성과 지표 계산"""
@@ -144,13 +145,17 @@ def get_strategy_description(strategy_name: str) -> str:
     return descriptions.get(strategy_name, "")
 
 @st.cache_data(ttl=300)  # 5분 캐시
-def load_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
+def load_stock_data(symbol: str, period: str = "1y") -> Tuple[pd.DataFrame, str]:
     """주식 데이터 로드 (캐시됨)"""
     try:
+        if not symbol or symbol.strip() == "":
+            return pd.DataFrame(), "티커가 입력되지 않았습니다."
+        
         ticker = yf.Ticker(symbol)
         data = ticker.history(period=period)
+        
         if data.empty:
-            return pd.DataFrame()
+            return pd.DataFrame(), f"'{symbol}' 티커의 데이터를 찾을 수 없습니다. 티커를 확인해주세요."
         
         # 주말 및 거래 없는 날 제거 (토요일=5, 일요일=6)
         data = data[data.index.dayofweek < 5]
@@ -161,9 +166,14 @@ def load_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
         # 인덱스를 날짜 형식으로 확실히 변환
         data.index = pd.to_datetime(data.index)
         
-        return data
-    except:
-        return pd.DataFrame()
+        if len(data) < 50:
+            return pd.DataFrame(), f"'{symbol}' 티커의 충분한 데이터가 없습니다. (최소 50일 필요)"
+        
+        return data, "데이터 로딩 성공"
+        
+    except Exception as e:
+        error_msg = f"'{symbol}' 데이터 로딩 중 오류: {str(e)}"
+        return pd.DataFrame(), error_msg
 
 def get_squeeze_periods(strategy_data: pd.DataFrame) -> List[Dict]:
     """Squeeze 구간을 연속된 기간으로 그룹화"""
@@ -465,6 +475,14 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
                           name='KC Lower', line=dict(color='red', dash='dot'), opacity=0.7),
                 row=1, col=1
             )
+        
+        # 200일 EMA 표시
+        if 'EMA_200' in strategy_data.columns:
+            fig.add_trace(
+                go.Scatter(x=strategy_data.index, y=strategy_data['EMA_200'], 
+                          name='EMA 200', line=dict(color='purple', width=2)),
+                row=1, col=1
+            )
             
         # Squeeze 상태 범례 추가
         if squeeze_periods:
@@ -535,6 +553,23 @@ def create_candlestick_chart(data: pd.DataFrame, buy_signals: List, sell_signals
 def main():
     """메인 애플리케이션"""
     
+    # 페이지 선택
+    st.sidebar.title("📍 Navigation")
+    page = st.sidebar.selectbox(
+        "Choose Analysis Type",
+        ["🎯 Single Stock Analysis", "🏆 S&P 500 Batch Analysis"]
+    )
+    
+    if page == "🏆 S&P 500 Batch Analysis":
+        # S&P 500 분석 페이지 import 및 실행
+        try:
+            from sp500_analyzer import create_sp500_analysis_page
+            create_sp500_analysis_page()
+        except ImportError as e:
+            st.error(f"S&P 500 분석 모듈을 로드할 수 없습니다: {e}")
+        return
+    
+    # 기존 단일 종목 분석 페이지
     # 헤더
     st.title("🚀 Smart Backtester v3")
     st.markdown("### 📈 Professional Trading Strategy Backtesting Platform")
@@ -545,19 +580,57 @@ def main():
     # 종목 선택
     st.sidebar.subheader("📊 Stock Selection")
     
-    # 인기 종목 프리셋
-    popular_stocks = {
-        "🇺🇸 US Tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"],
-        "🇺🇸 US Finance": ["JPM", "BAC", "WFC", "C", "GS"],
-        "🇰🇷 Korean": ["005930.KS", "000660.KS", "035420.KS", "051910.KS"]
-    }
+    # 티커 입력 방식 선택
+    input_method = st.sidebar.radio(
+        "입력 방식",
+        ["🔤 직접 입력", "⭐ 인기 종목 선택"],
+        horizontal=True
+    )
     
-    preset_category = st.sidebar.selectbox("Quick Select", list(popular_stocks.keys()))
-    if preset_category:
-        selected_preset = st.sidebar.selectbox("Symbol", popular_stocks[preset_category])
-        symbol = selected_preset
+    if input_method == "🔤 직접 입력":
+        symbol = st.sidebar.text_input(
+            "티커 입력", 
+            value="AAPL", 
+            help="예: AAPL, MSFT, 005930.KS (삼성전자), TSLA 등"
+        ).upper().strip()
+        
+        # 티커 형식 검증 및 피드백
+        if symbol:
+            if "." in symbol:
+                # 국제 주식
+                if symbol.endswith(".KS"):
+                    st.sidebar.success("🇰🇷 한국 주식")
+                elif symbol.endswith(".T"):
+                    st.sidebar.success("🇯🇵 일본 주식")
+                elif symbol.endswith(".L"):
+                    st.sidebar.success("🇬🇧 영국 주식")
+                else:
+                    st.sidebar.info("🌍 국제 주식")
+            else:
+                # 미국 주식
+                st.sidebar.success("🇺🇸 미국 주식")
+        
+        # 입력 가이드
+        st.sidebar.info("""
+        💡 **티커 입력 가이드:**
+        - 🇺🇸 미국: AAPL, MSFT, GOOGL
+        - 🇰🇷 한국: 005930.KS, 000660.KS
+        - 🇯🇵 일본: 7203.T, 9984.T
+        - �� 영국: RDSA.L, BP.L
+        """)
+        
     else:
-        symbol = st.sidebar.text_input("Enter Symbol", value="AAPL").upper()
+        # 인기 종목 프리셋
+        popular_stocks = {
+            "🇺🇸 US Tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"],
+            "🇺🇸 US Finance": ["JPM", "BAC", "WFC", "C", "GS", "V", "MA"],
+            "🇺🇸 US Consumer": ["KO", "PEP", "WMT", "HD", "MCD", "NKE"],
+            "🇰🇷 Korean": ["005930.KS", "000660.KS", "035420.KS", "051910.KS", "035720.KS"],
+            "🌏 Global ETF": ["SPY", "QQQ", "VTI", "IWM", "EFA", "EEM"]
+        }
+        
+        preset_category = st.sidebar.selectbox("카테고리 선택", list(popular_stocks.keys()))
+        symbol = st.sidebar.selectbox("종목 선택", popular_stocks[preset_category])
     
     # 기간 설정
     period_options = {
@@ -651,9 +724,12 @@ def main():
             "kc_mult": st.sidebar.slider("⚡ Keltner Multiplier", 1.0, 2.5, 1.5, 0.1,
                                        help="켈트나 채널 ATR 승수"),
             "momentum_period": st.sidebar.slider("🚀 Momentum Period", 8, 20, 12,
-                                                help="모멘텀 계산 기간")
+                                                help="모멘텀 계산 기간"),
+            "ema_period": st.sidebar.slider("📈 EMA Filter Period", 50, 300, 200,
+                                          help="EMA 필터 기간 (매수 조건: 주가 > EMA)")
         }
-        st.sidebar.info("💡 Squeeze 해제 후 모멘텀이 양수로 전환시 매수, 음수로 전환시 매도")
+        st.sidebar.info("💡 Squeeze 해제 후 모멘텀이 양수로 전환시 + 주가가 EMA 위에 있을 때 매수")
+        st.sidebar.warning("⚠️ EMA 필터로 인해 매수 기회가 줄어들 수 있습니다.")
     
     # 손절매 설정
     st.sidebar.subheader("🛡️ Risk Management")
@@ -685,6 +761,19 @@ def main():
             )
             st.sidebar.info("💡 지지선을 2% 하향 돌파시 자동 매도")
     
+    # 익절매 설정 추가
+    enable_take_profit = st.sidebar.checkbox("Enable Take Profit", value=False)
+    
+    take_profit_pct = None
+    
+    if enable_take_profit:
+        take_profit_pct = st.sidebar.slider(
+            "📈 Take Profit (%)", 
+            5.0, 50.0, 15.0, 1.0,
+            help="수익이 이 비율에 도달하면 자동 매도"
+        )
+        st.sidebar.info("💡 매수가 대비 수익률이 설정값에 도달하면 익절매 실행")
+    
     # 초기 자본
     initial_capital = st.sidebar.number_input("💰 Initial Capital ($)", min_value=1000, max_value=1000000, value=10000, step=1000)
     
@@ -699,21 +788,30 @@ def main():
         
         # 로딩 표시
         with st.spinner(f"Loading data for {symbol}..."):
-            data = load_stock_data(symbol, period)
+            data, load_message = load_stock_data(symbol, period)
         
         if data.empty:
-            st.error(f"Could not load data for {symbol}. Please check the symbol.")
+            st.error(f"❌ {load_message}")
+            st.info("""
+            **티커 입력 팁:**
+            - 🇺🇸 미국 주식: 회사명의 축약형 (예: AAPL, MSFT, GOOGL)
+            - 🇰🇷 한국 주식: 종목코드.KS (예: 005930.KS, 000660.KS)
+            - 🇯🇵 일본 주식: 종목코드.T (예: 7203.T)
+            - 🇨🇳 중국 주식: 나스닥 상장 중국기업 (예: BABA, JD)
+            """)
             return
+        else:
+            st.success(f"✅ {symbol} 데이터 로딩 완료! ({len(data)}일간 데이터)")
         
         # 전략 실행
         with st.spinner("Running backtest..."):
             # 전략 신호 계산
             strategy_data = backtester.calculate_strategy_signals(strategy_name, data, **strategy_params)
             
-            # 백테스트 실행 (손절매 설정 포함)
+            # 백테스트 실행 (손절매/익절매 설정 포함)
             result = backtester.run_backtest(
                 data, strategy_data, initial_capital, 
-                stop_loss_pct, support_resistance_lookback
+                stop_loss_pct, take_profit_pct, support_resistance_lookback
             )
             metrics = backtester.calculate_metrics(result)
             
@@ -898,7 +996,7 @@ def main():
         
         # 샘플 차트 표시
         st.subheader("📊 Sample: Apple Inc. (AAPL)")
-        sample_data = load_stock_data("AAPL", "6mo")
+        sample_data, _ = load_stock_data("AAPL", "6mo")
         if not sample_data.empty:
             fig_sample = go.Figure(data=go.Candlestick(
                 x=sample_data.index,
